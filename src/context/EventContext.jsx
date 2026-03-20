@@ -277,26 +277,32 @@ export function EventProvider({ children }) {
   }
 
   const getLeaderboardData = useCallback((allUsers = []) => {
-    // Student rankings based on 10 pts per attended event
+    // 1. Calculate Student Rankings
     const studentPoints = {}
-    registrations.filter(r => r.attended).forEach(r => {
-      studentPoints[r.regNo] = (studentPoints[r.regNo] || 0) + 10
-    })
     
-    // Club rankings
+    // Sum up attendedEvents from all club memberships
+    members.forEach(m => {
+      if (m.regNo) {
+        studentPoints[m.regNo] = (studentPoints[m.regNo] || 0) + ((m.attendedEvents || 0) * 10)
+      }
+    })
+
+    // Also include one-off event registrations that might not be in "members" 
+    // but avoid double counting if possible. For simplicity in this demo, 
+    // we'll prioritize "members" data as it's the most explicitly updated.
+    
+    // 2. Calculate Club Performance
     const clubPerformance = clubs.map(club => {
-      // 1. Hosting Points: 20 pts per approved event
+      // Hosting Points: 20 pts per approved event
       const clubEvents = events.filter(e => e.clubId === club.id && e.status === 'approved')
       const hostPoints = clubEvents.length * 20
       
-      // 2. Completion Bonus: 30 pts if any student was marked as attended for the event
-      let completionPoints = 0
-      clubEvents.forEach(e => {
-        const hasAttendance = registrations.some(r => r.eventId === e.id && r.attended)
-        if (hasAttendance) completionPoints += 30
-      })
+      // Participation Bonus: Sum of all member attendances * 5
+      const clubMembers = members.filter(m => m.clubId === club.id)
+      const totalAttendances = clubMembers.reduce((sum, m) => sum + (m.attendedEvents || 0), 0)
+      const participationPoints = totalAttendances * 5
       
-      // 3. Feedback Bonus: Avg Rating * 10
+      // Feedback Bonus: Avg Rating * 10
       const clubFeedback = feedback.filter(f => {
         const event = events.find(e => e.id === f.eventId)
         return event && event.clubId === club.id
@@ -310,15 +316,18 @@ export function EventProvider({ children }) {
       
       return {
         ...club,
-        score: hostPoints + completionPoints + feedbackPoints,
+        score: hostPoints + participationPoints + feedbackPoints,
         avgRating,
-        feedbackCount: clubFeedback.length
+        feedbackCount: clubFeedback.length,
+        totalAttendances
       }
     }).sort((a, b) => b.score - a.score)
 
+    // Combine into final results
+    const uniqueRegNos = [...new Set([...Object.keys(studentPoints), ...members.map(m => m.regNo)])]
+    
     return {
-      topMembers: Object.keys(studentPoints).map(regNo => {
-        // Search in allUsers first, then members, then fallback
+      topMembers: uniqueRegNos.map(regNo => {
         const userDetails = allUsers.find(u => u.regNo === regNo)
         const memberDetails = members.find(m => m.regNo === regNo)
         
@@ -326,9 +335,9 @@ export function EventProvider({ children }) {
           name: userDetails?.name || memberDetails?.name || 'Unknown Student',
           dept: userDetails?.dept || memberDetails?.dept || 'N/A',
           regNo,
-          points: studentPoints[regNo] 
+          points: studentPoints[regNo] || 0
         }
-      }).sort((a, b) => b.points - a.points),
+      }).filter(m => m.points > 0).sort((a, b) => b.points - a.points),
       topClubs: clubPerformance
     }
   }, [registrations, events, feedback, clubs, members])
